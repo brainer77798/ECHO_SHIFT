@@ -1,0 +1,802 @@
+
+import math
+import random
+import sys
+
+import pygame
+
+from settings import (
+    GAME_TITLE,
+    SCREEN_WIDTH,
+    SCREEN_HEIGHT,
+    TARGET_FPS,
+    BACKGROUND,
+    PLAYER_COLOR,
+    ENEMY_COLOR,
+    WHITE,
+    MUTED,
+)
+
+# --------------------------------------------------
+# ECHO//SHIFT - First Playable Prototype
+# --------------------------------------------------
+
+pygame.init()
+
+SCREEN = pygame.display.set_mode(
+    (SCREEN_WIDTH, SCREEN_HEIGHT)
+)
+pygame.display.set_caption(GAME_TITLE)
+
+CLOCK = pygame.time.Clock()
+
+FONT_SMALL = pygame.font.Font(None, 22)
+FONT_MEDIUM = pygame.font.Font(None, 30)
+FONT_LARGE = pygame.font.Font(None, 58)
+
+VIOLET = (139, 114, 255)
+CYAN_DARK = (18, 100, 100)
+RED_DARK = (100, 30, 48)
+GRID_COLOR = (15, 35, 49)
+BORDER_COLOR = (28, 83, 99)
+
+WIDTH = SCREEN_WIDTH
+HEIGHT = SCREEN_HEIGHT
+
+ARENA = pygame.Rect(
+    45,
+    90,
+    WIDTH - 90,
+    HEIGHT - 135,
+)
+
+PLAYER_RADIUS = 16
+PLAYER_SPEED = 255.0
+PLAYER_MAX_HEALTH = 100
+
+SHOT_SPEED = 650.0
+SHOT_COOLDOWN = 0.17
+SHOT_RADIUS = 5
+
+DASH_DISTANCE = 105.0
+DASH_COOLDOWN = 1.0
+
+MAX_ENEMIES = 5
+
+
+def clamp(value, low, high):
+    return max(low, min(value, high))
+
+
+def draw_glow(surface, position, color, radius):
+    """Draw a simple layered glow without extra assets."""
+    x, y = int(position[0]), int(position[1])
+
+    for extra_radius, strength in (
+        (10, 35),
+        (6, 65),
+        (3, 110),
+    ):
+        glow_color = tuple(
+            min(255, int(channel * strength / 110))
+            for channel in color
+        )
+
+        pygame.draw.circle(
+            surface,
+            glow_color,
+            (x, y),
+            radius + extra_radius,
+        )
+
+
+def keep_in_arena(position, radius):
+    position.x = clamp(
+        position.x,
+        ARENA.left + radius,
+        ARENA.right - radius,
+    )
+    position.y = clamp(
+        position.y,
+        ARENA.top + radius,
+        ARENA.bottom - radius,
+    )
+
+
+class Bullet:
+    def __init__(self, position, direction):
+        self.position = pygame.Vector2(position)
+        self.velocity = direction * SHOT_SPEED
+        self.life = 1.2
+
+    def update(self, dt):
+        self.position += self.velocity * dt
+        self.life -= dt
+
+    def draw(self, surface):
+        draw_glow(
+            surface,
+            self.position,
+            PLAYER_COLOR,
+            SHOT_RADIUS,
+        )
+
+        pygame.draw.circle(
+            surface,
+            WHITE,
+            (round(self.position.x), round(self.position.y)),
+            3,
+        )
+
+
+class Enemy:
+    def __init__(self, position):
+        self.position = pygame.Vector2(position)
+        self.radius = 17
+        self.health = 2
+        self.speed = random.uniform(65, 90)
+        self.hit_flash = 0.0
+
+    def update(self, player_position, dt):
+        direction = player_position - self.position
+
+        if direction.length_squared() > 1:
+            direction = direction.normalize()
+            self.position += direction * self.speed * dt
+
+        keep_in_arena(self.position, self.radius)
+
+        self.hit_flash = max(0.0, self.hit_flash - dt)
+
+    def draw(self, surface):
+        color = WHITE if self.hit_flash > 0 else ENEMY_COLOR
+
+        draw_glow(
+            surface,
+            self.position,
+            color,
+            self.radius,
+        )
+
+        center = (
+            round(self.position.x),
+            round(self.position.y),
+        )
+
+        pygame.draw.circle(
+            surface,
+            (100, 26, 43),
+            center,
+            self.radius,
+        )
+
+        pygame.draw.circle(
+            surface,
+            color,
+            center,
+            self.radius,
+            2,
+        )
+
+        # Robot's glowing central eye
+        pygame.draw.circle(
+            surface,
+            WHITE,
+            center,
+            5,
+        )
+
+        # Enemy health indicator
+        bar_width = 34
+        bar_rect = pygame.Rect(
+            center[0] - bar_width // 2,
+            center[1] - 28,
+            bar_width,
+            4,
+        )
+
+        pygame.draw.rect(
+            surface,
+            (50, 27, 38),
+            bar_rect,
+            border_radius=2,
+        )
+
+        if self.health > 0:
+            health_rect = pygame.Rect(
+                bar_rect.x,
+                bar_rect.y,
+                int(bar_width * self.health / 2),
+                bar_rect.height,
+            )
+
+            pygame.draw.rect(
+                surface,
+                ENEMY_COLOR,
+                health_rect,
+                border_radius=2,
+            )
+
+
+def spawn_enemy(player_position):
+    """Spawn a drone along the arena edges."""
+    for _ in range(30):
+        side = random.randrange(4)
+
+        if side == 0:
+            position = pygame.Vector2(
+                random.randint(ARENA.left + 30, ARENA.right - 30),
+                ARENA.top + 30,
+            )
+        elif side == 1:
+            position = pygame.Vector2(
+                random.randint(ARENA.left + 30, ARENA.right - 30),
+                ARENA.bottom - 30,
+            )
+        elif side == 2:
+            position = pygame.Vector2(
+                ARENA.left + 30,
+                random.randint(ARENA.top + 30, ARENA.bottom - 30),
+            )
+        else:
+            position = pygame.Vector2(
+                ARENA.right - 30,
+                random.randint(ARENA.top + 30, ARENA.bottom - 30),
+            )
+
+        if position.distance_to(player_position) > 230:
+            return Enemy(position)
+
+    return Enemy(
+        pygame.Vector2(ARENA.right - 30, ARENA.bottom - 30)
+    )
+
+
+def reset_game():
+    player = pygame.Vector2(
+        WIDTH / 2,
+        HEIGHT / 2,
+    )
+
+    return {
+        "player": player,
+        "health": PLAYER_MAX_HEALTH,
+        "bullets": [],
+        "enemies": [
+            spawn_enemy(player)
+            for _ in range(MAX_ENEMIES)
+        ],
+        "score": 0,
+        "shot_timer": 0.0,
+        "dash_timer": 0.0,
+        "damage_timer": 0.0,
+        "dash_flash": 0.0,
+        "game_over": False,
+    }
+
+
+def draw_arena(surface):
+    surface.fill(BACKGROUND)
+
+    # Futuristic floor grid
+    grid_size = 40
+
+    for x in range(ARENA.left, ARENA.right, grid_size):
+        pygame.draw.line(
+            surface,
+            GRID_COLOR,
+            (x, ARENA.top),
+            (x, ARENA.bottom),
+            1,
+        )
+
+    for y in range(ARENA.top, ARENA.bottom, grid_size):
+        pygame.draw.line(
+            surface,
+            GRID_COLOR,
+            (ARENA.left, y),
+            (ARENA.right, y),
+            1,
+        )
+
+    pygame.draw.rect(
+        surface,
+        BORDER_COLOR,
+        ARENA,
+        2,
+        border_radius=8,
+    )
+
+
+def draw_hud(game, elapsed_time):
+    # Header
+    title = FONT_MEDIUM.render(
+        "ECHO//SHIFT",
+        True,
+        PLAYER_COLOR,
+    )
+
+    SCREEN.blit(title, (45, 22))
+
+    subtitle = FONT_SMALL.render(
+        "TEMPORAL RESEARCH FACILITY  //  COMBAT TEST",
+        True,
+        MUTED,
+    )
+
+    SCREEN.blit(subtitle, (235, 29))
+
+    score_text = FONT_MEDIUM.render(
+        f"SCORE  {game['score']:06d}",
+        True,
+        WHITE,
+    )
+
+    SCREEN.blit(
+        score_text,
+        (WIDTH - score_text.get_width() - 45, 22),
+    )
+
+    # Player health bar
+    label = FONT_SMALL.render(
+        "HEALTH",
+        True,
+        WHITE,
+    )
+
+    SCREEN.blit(label, (45, HEIGHT - 31))
+
+    bar = pygame.Rect(115, HEIGHT - 29, 200, 12)
+
+    pygame.draw.rect(
+        SCREEN,
+        (38, 45, 58),
+        bar,
+        border_radius=5,
+    )
+
+    health_fraction = game["health"] / PLAYER_MAX_HEALTH
+
+    health_rect = pygame.Rect(
+        bar.x,
+        bar.y,
+        int(bar.width * health_fraction),
+        bar.height,
+    )
+
+    health_color = (
+        PLAYER_COLOR if health_fraction > 0.3
+        else ENEMY_COLOR
+    )
+
+    if health_rect.width > 0:
+        pygame.draw.rect(
+            SCREEN,
+            health_color,
+            health_rect,
+            border_radius=5,
+        )
+
+    controls = FONT_SMALL.render(
+        "WASD MOVE   |   MOUSE AIM   |   LEFT CLICK FIRE"
+        "   |   SPACE DASH",
+        True,
+        MUTED,
+    )
+
+    SCREEN.blit(
+        controls,
+        controls.get_rect(
+            center=(WIDTH // 2, HEIGHT - 25)
+        ),
+    )
+
+    dash_text = (
+        "DASH READY"
+        if game["dash_timer"] <= 0
+        else f"DASH {game['dash_timer']:.1f}s"
+    )
+
+    dash_color = (
+        PLAYER_COLOR
+        if game["dash_timer"] <= 0
+        else MUTED
+    )
+
+    dash_label = FONT_SMALL.render(
+        dash_text,
+        True,
+        dash_color,
+    )
+
+    SCREEN.blit(
+        dash_label,
+        (WIDTH - dash_label.get_width() - 45, HEIGHT - 31),
+    )
+
+
+def draw_player(surface, player_position, mouse_position, health):
+    direction = pygame.Vector2(mouse_position) - player_position
+
+    if direction.length_squared() > 1:
+        direction = direction.normalize()
+    else:
+        direction = pygame.Vector2(1, 0)
+
+    center = (
+        round(player_position.x),
+        round(player_position.y),
+    )
+
+    draw_glow(
+        surface,
+        player_position,
+        PLAYER_COLOR,
+        PLAYER_RADIUS,
+    )
+
+    pygame.draw.circle(
+        surface,
+        (12, 71, 79),
+        center,
+        PLAYER_RADIUS,
+    )
+
+    pygame.draw.circle(
+        surface,
+        PLAYER_COLOR,
+        center,
+        PLAYER_RADIUS,
+        2,
+    )
+
+    # Small pointer showing the direction of aim
+    tip = player_position + direction * 26
+    left = player_position + direction.rotate(145) * 9
+    right = player_position + direction.rotate(-145) * 9
+
+    pygame.draw.polygon(
+        surface,
+        WHITE,
+        [
+            (round(tip.x), round(tip.y)),
+            (round(left.x), round(left.y)),
+            (round(right.x), round(right.y)),
+        ],
+    )
+
+    # Small crosshair
+    mx, my = mouse_position
+
+    pygame.draw.circle(
+        surface,
+        PLAYER_COLOR,
+        (mx, my),
+        10,
+        1,
+    )
+
+    pygame.draw.line(
+        surface,
+        PLAYER_COLOR,
+        (mx - 15, my),
+        (mx - 5, my),
+        1,
+    )
+
+    pygame.draw.line(
+        surface,
+        PLAYER_COLOR,
+        (mx + 5, my),
+        (mx + 15, my),
+        1,
+    )
+
+    pygame.draw.line(
+        surface,
+        PLAYER_COLOR,
+        (mx, my - 15),
+        (mx, my - 5),
+        1,
+    )
+
+    pygame.draw.line(
+        surface,
+        PLAYER_COLOR,
+        (mx, my + 5),
+        (mx, my + 15),
+        1,
+    )
+
+
+def main():
+    game = reset_game()
+    running = True
+
+    while running:
+        dt = min(
+            CLOCK.tick(TARGET_FPS) / 1000.0,
+            0.033,
+        )
+
+        game["shot_timer"] = max(
+            0.0,
+            game["shot_timer"] - dt,
+        )
+
+        game["dash_timer"] = max(
+            0.0,
+            game["dash_timer"] - dt,
+        )
+
+        game["damage_timer"] = max(
+            0.0,
+            game["damage_timer"] - dt,
+        )
+
+        game["dash_flash"] = max(
+            0.0,
+            game["dash_flash"] - dt,
+        )
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+
+                if (
+                    event.key == pygame.K_r
+                    and game["game_over"]
+                ):
+                    game = reset_game()
+
+                # Dash in the movement direction.
+                if (
+                    event.key == pygame.K_SPACE
+                    and not game["game_over"]
+                    and game["dash_timer"] <= 0
+                ):
+                    keys = pygame.key.get_pressed()
+
+                    movement = pygame.Vector2(
+                        int(keys[pygame.K_d]) - int(keys[pygame.K_a]),
+                        int(keys[pygame.K_s]) - int(keys[pygame.K_w]),
+                    )
+
+                    if movement.length_squared() > 0:
+                        movement = movement.normalize()
+                    else:
+                        movement = (
+                            pygame.Vector2(pygame.mouse.get_pos())
+                            - game["player"]
+                        )
+
+                        if movement.length_squared() > 0:
+                            movement = movement.normalize()
+                        else:
+                            movement = pygame.Vector2(1, 0)
+
+                    game["player"] += movement * DASH_DISTANCE
+
+                    keep_in_arena(
+                        game["player"],
+                        PLAYER_RADIUS,
+                    )
+
+                    game["dash_timer"] = DASH_COOLDOWN
+                    game["dash_flash"] = 0.18
+
+        if not game["game_over"]:
+            keys = pygame.key.get_pressed()
+            mouse_position = pygame.mouse.get_pos()
+
+            # ------------------------------
+            # Player movement
+            # ------------------------------
+            movement = pygame.Vector2(
+                int(keys[pygame.K_d]) - int(keys[pygame.K_a]),
+                int(keys[pygame.K_s]) - int(keys[pygame.K_w]),
+            )
+
+            if movement.length_squared() > 0:
+                movement = movement.normalize()
+
+            game["player"] += movement * PLAYER_SPEED * dt
+
+            keep_in_arena(
+                game["player"],
+                PLAYER_RADIUS,
+            )
+
+            # ------------------------------
+            # Shooting
+            # ------------------------------
+            if (
+                pygame.mouse.get_pressed()[0]
+                and game["shot_timer"] <= 0
+            ):
+                direction = (
+                    pygame.Vector2(mouse_position)
+                    - game["player"]
+                )
+
+                if direction.length_squared() > 0:
+                    direction = direction.normalize()
+
+                    bullet_start = (
+                        game["player"] + direction * 22
+                    )
+
+                    game["bullets"].append(
+                        Bullet(bullet_start, direction)
+                    )
+
+                    game["shot_timer"] = SHOT_COOLDOWN
+
+            # ------------------------------
+            # Update projectiles
+            # ------------------------------
+            for bullet in game["bullets"][:]:
+                bullet.update(dt)
+
+                if (
+                    bullet.life <= 0
+                    or not ARENA.collidepoint(
+                        int(bullet.position.x),
+                        int(bullet.position.y),
+                    )
+                ):
+                    game["bullets"].remove(bullet)
+
+            # ------------------------------
+            # Update enemy drones
+            # ------------------------------
+            for enemy in game["enemies"]:
+                enemy.update(game["player"], dt)
+
+                distance = enemy.position.distance_to(
+                    game["player"]
+                )
+
+                # Contact damage, with a cooldown
+                if (
+                    distance < enemy.radius + PLAYER_RADIUS
+                    and game["damage_timer"] <= 0
+                ):
+                    game["health"] = max(
+                        0,
+                        game["health"] - 12,
+                    )
+
+                    game["damage_timer"] = 0.65
+
+                    if game["health"] <= 0:
+                        game["game_over"] = True
+
+            # ------------------------------
+            # Projectile / enemy collisions
+            # ------------------------------
+            for bullet in game["bullets"][:]:
+                hit_enemy = None
+
+                for enemy in game["enemies"]:
+                    distance = enemy.position.distance_to(
+                        bullet.position
+                    )
+
+                    if distance < enemy.radius + SHOT_RADIUS:
+                        hit_enemy = enemy
+                        break
+
+                if hit_enemy is not None:
+                    if bullet in game["bullets"]:
+                        game["bullets"].remove(bullet)
+
+                    hit_enemy.health -= 1
+                    hit_enemy.hit_flash = 0.08
+
+                    if hit_enemy.health <= 0:
+                        game["enemies"].remove(hit_enemy)
+                        game["score"] += 100
+
+            # Keep the arena populated with drones
+            while len(game["enemies"]) < MAX_ENEMIES:
+                game["enemies"].append(
+                    spawn_enemy(game["player"])
+                )
+
+        # ------------------------------
+        # Render the scene
+        # ------------------------------
+        draw_arena(SCREEN)
+
+        # Dash ring
+        if game["dash_flash"] > 0:
+            pygame.draw.circle(
+                SCREEN,
+                PLAYER_COLOR,
+                (
+                    round(game["player"].x),
+                    round(game["player"].y),
+                ),
+                int(
+                    PLAYER_RADIUS
+                    + 45 * game["dash_flash"] / 0.18
+                ),
+                2,
+            )
+
+        for bullet in game["bullets"]:
+            bullet.draw(SCREEN)
+
+        for enemy in game["enemies"]:
+            enemy.draw(SCREEN)
+
+        draw_player(
+            SCREEN,
+            game["player"],
+            pygame.mouse.get_pos(),
+            game["health"],
+        )
+
+        draw_hud(game, 0)
+
+        if game["game_over"]:
+            overlay = pygame.Surface(
+                (WIDTH, HEIGHT),
+                pygame.SRCALPHA,
+            )
+
+            overlay.fill((2, 5, 12, 205))
+            SCREEN.blit(overlay, (0, 0))
+
+            title = FONT_LARGE.render(
+                "SYSTEM FAILURE",
+                True,
+                ENEMY_COLOR,
+            )
+
+            subtitle = FONT_MEDIUM.render(
+                f"Final score: {game['score']}",
+                True,
+                WHITE,
+            )
+
+            restart = FONT_MEDIUM.render(
+                "Press R to try again  |  ESC to quit",
+                True,
+                PLAYER_COLOR,
+            )
+
+            SCREEN.blit(
+                title,
+                title.get_rect(
+                    center=(WIDTH // 2, HEIGHT // 2 - 55)
+                ),
+            )
+
+            SCREEN.blit(
+                subtitle,
+                subtitle.get_rect(
+                    center=(WIDTH // 2, HEIGHT // 2 + 5)
+                ),
+            )
+
+            SCREEN.blit(
+                restart,
+                restart.get_rect(
+                    center=(WIDTH // 2, HEIGHT // 2 + 55)
+                ),
+            )
+
+        pygame.display.flip()
+
+    pygame.quit()
+    sys.exit()
+
+
+if __name__ == "__main__":
+    main()
