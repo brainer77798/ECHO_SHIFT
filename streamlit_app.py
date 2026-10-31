@@ -29,13 +29,6 @@ st.caption(
     "embedded below."
 )
 
-st.info(
-    "Click inside the game frame once it loads so your keyboard and mouse input reach it. "
-    "Audio may stay muted until that first click (browser autoplay policy). This build is "
-    "single-player only -- LAN co-op needs real network sockets a browser can't open.",
-    icon="ℹ️",
-)
-
 components.iframe(src=f"/{GAME_URL}", height=GAME_HEIGHT, scrolling=False)
 
 with st.expander("About ECHO//SHIFT"):
