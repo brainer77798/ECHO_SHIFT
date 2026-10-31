@@ -51,8 +51,14 @@ func _ready() -> void:
 	_ambient_player.volume_db = -22.0
 	add_child(_ambient_player)
 	_build_sfx()
-	_music_thread = Thread.new()
-	_music_thread.start(_build_music_thread)
+	if OS.has_feature("threads"):
+		_music_thread = Thread.new()
+		_music_thread.start(_build_music_thread)
+	else:
+		# Threaded export variants aren't available everywhere (e.g. the Web export
+		# without cross-origin-isolation headers), so fall back to building synchronously.
+		_build_music_thread()
+		_music_ready = true
 
 func _exit_tree() -> void:
 	if _music_thread and _music_thread.is_started():

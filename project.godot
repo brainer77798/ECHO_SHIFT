@@ -56,6 +56,7 @@ common/physics_ticks_per_second=60
 
 [rendering]
 
+renderer/rendering_method.web="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.012, 0.02, 0.035, 1)
 anti_aliasing/quality/msaa_3d=2
 lights_and_shadows/positional_shadow/atlas_size=2048
